@@ -18,7 +18,9 @@
 				
 		this.conf = {
 			tolerance: 2, // max bound for bezier->line segment conversion, in native SVG units
-			toleranceSvg: 0.005 // fudge factor for browser inaccuracy in SVG unit handling
+			toleranceSvg: 0.005, // fudge factor for browser inaccuracy in SVG unit handling
+			scale: 72,
+			endpointTolerance: 2
 		}; 
 	}
 	
@@ -73,8 +75,557 @@
 		// split any compound paths into individual path elements
 		this.recurse(this.svgRoot, this.splitPath);
 		
+		// merge open paths into closed paths
+		// for numerically accurate exports
+		this.mergeLines(this.svgRoot, this.conf.toleranceSvg);
+		
+		console.log('this is the scale ',this.conf.scale*(0.02), this.conf.endpointTolerance);	
+		//console.log('scale',this.conf.scale);
+		// for exports with wide gaps, roughly 0.005 inch
+		this.mergeLines(this.svgRoot, this.conf.endpointTolerance);
+		// finally close any open paths with a really wide margin
+		this.mergeLines(this.svgRoot, 3*this.conf.endpointTolerance);	
+		
 		return this.svgRoot;
 
+	}
+
+	SvgParser.prototype.mergeLines = function(root, tolerance){	
+	
+		/*for(var i=0; i<root.children.length; i++){
+			var p = root.children[i];
+			if(!this.isClosed(p)){
+				this.reverseOpenPath(p);
+			}
+		}
+		
+		return false;*/
+		var openpaths = [];
+		for(var i=0; i<root.children.length; i++){
+			var p = root.children[i];
+			if(!this.isClosed(p, tolerance)){
+				openpaths.push(p);
+			}
+			else if(p.tagName == 'path'){
+				var lastCommand = p.pathSegList.getItem(p.pathSegList.numberOfItems-1).pathSegTypeAsLetter;
+				if(lastCommand != 'z' && lastCommand != 'Z'){
+					// endpoints are actually far apart
+					p.pathSegList.appendItem(p.createSVGPathSegClosePath());
+				}
+			}
+		}
+				
+		// record endpoints
+		for(i=0; i<openpaths.length; i++){
+			var p = openpaths[i];
+			
+			p.endpoints = this.getEndpoints(p);
+		}
+
+		for(i=0; i<openpaths.length; i++){
+			var p = openpaths[i];
+			var c = this.getCoincident(p, openpaths, tolerance);
+
+			while(c){
+				if(c.reverse1){
+					this.reverseOpenPath(p);
+				}
+				if(c.reverse2){
+					this.reverseOpenPath(c.path);
+				}
+				
+				/*if(openpaths.length == 2){
+					
+				console.log('premerge A', p.getAttribute('x1'), p.getAttribute('y1'), p.getAttribute('x2'), p.getAttribute('y2'), p.endpoints);
+				console.log('premerge B', c.path.getAttribute('x1'), c.path.getAttribute('y1'), c.path.getAttribute('x2'), c.path.getAttribute('y2'), c.path.endpoints);
+				console.log('premerge C', c.reverse1, c.reverse2);
+				
+				}*/
+				var merged = this.mergeOpenPaths(p,c.path);
+				
+				if(!merged){
+					break;
+				}
+				
+				/*if(openpaths.length == 2){
+				console.log('merged 1', (new XMLSerializer()).serializeToString(p));
+				console.log('merged 2', (new XMLSerializer()).serializeToString(c.path), c.reverse1, c.reverse2, p.endpoints);
+				console.log('merged 3', (new XMLSerializer()).serializeToString(merged));
+				console.log('merged 4', p.endpoints, c.path.endpoints);
+				console.log(root);
+				}*/
+				
+				openpaths.splice(openpaths.indexOf(c.path), 1);
+				
+				root.appendChild(merged);
+				
+				openpaths.splice(i,1, merged);
+				
+				if(this.isClosed(merged, tolerance)){
+					var lastCommand = merged.pathSegList.getItem(merged.pathSegList.numberOfItems-1).pathSegTypeAsLetter;
+					if(lastCommand != 'z' && lastCommand != 'Z'){
+						// endpoints are actually far apart
+						console.log(merged);
+						merged.pathSegList.appendItem(merged.createSVGPathSegClosePath());
+					}
+					
+					openpaths.splice(i,1);
+					i--;
+					break;
+				}
+				
+				merged.endpoints = this.getEndpoints(merged);
+				
+				p = merged;
+				c = this.getCoincident(p, openpaths, tolerance);
+			}
+		}
+	}
+
+	SvgParser.prototype.isClosed = function(p, tolerance){
+		var openElements = ['line', 'polyline', 'path'];
+		
+		if(openElements.indexOf(p.tagName) < 0){
+			// things like rect, circle etc are by definition closed shapes
+			return true;
+		}
+		
+		if(p.tagName == 'line'){
+			return false;
+		}
+		
+		if(p.tagName == 'polyline'){
+			// a 2-points polyline cannot be closed.
+			// return false to ensures that the polyline is further processed
+			if(p.points.length < 3){
+				return false;
+			}
+			var first = {
+				x: p.points[0].x,
+				y: p.points[0].y
+			};
+			
+			var last = {
+				x: p.points[p.points.length-1].x,
+				y: p.points[p.points.length-1].y
+			};
+			
+			if(GeometryUtil.almostEqual(first.x,last.x, tolerance || this.conf.toleranceSvg) && GeometryUtil.almostEqual(first.y,last.y, tolerance || this.conf.toleranceSvg)){
+				return true;
+			}
+			else{
+				return false;
+			}
+			// path can be closed if it touches itself at some point
+			/*for(var j=p.points.length-1; j>0; j--){
+				var current = p.points[j];
+				if(GeometryUtil.almostEqual(first.x,current.x, tolerance || this.conf.toleranceSvg) && GeometryUtil.almostEqual(first.y,current.y, tolerance || this.conf.toleranceSvg)){
+					return true;
+				}
+			}
+			
+			return false;*/
+		}
+		
+		if(p.tagName == 'path'){
+			for(var j=0; j<p.pathSegList.numberOfItems; j++){
+				var c = p.pathSegList.getItem(j);
+				if(c.pathSegTypeAsLetter == 'z' || c.pathSegTypeAsLetter == 'Z'){
+					return true;
+				}
+			}
+			// could still be "closed" if start and end coincide
+			var test = this.polygonifyPath(p);
+			if(!test){
+				return false;
+			}
+			if(test.length < 2){
+				return true;
+			}
+			var first = test[0];
+			var last = test[test.length-1];
+			
+			if(GeometryUtil.almostEqualPoints(first, last, tolerance || this.conf.toleranceSvg)){
+				return true;
+			}
+		}
+	}
+
+	SvgParser.prototype.polygonifyPath = function(path){
+		// we'll assume that splitpath has already been run on this path, and it only has one M/m command 
+		var seglist = path.pathSegList;
+		var poly = [];
+		var firstCommand = seglist.getItem(0);
+		var lastCommand = seglist.getItem(seglist.numberOfItems-1);
+
+		var x=0, y=0, x0=0, y0=0, x1=0, y1=0, x2=0, y2=0, prevx=0, prevy=0, prevx1=0, prevy1=0, prevx2=0, prevy2=0;
+		
+		for(var i=0; i<seglist.numberOfItems; i++){
+			var s = seglist.getItem(i);
+			var command = s.pathSegTypeAsLetter;
+			
+			prevx = x;
+			prevy = y;
+			
+			prevx1 = x1;
+			prevy1 = y1;
+			
+			prevx2 = x2;
+			prevy2 = y2;
+			
+			if (/[MLHVCSQTA]/.test(command)){
+				if ('x1' in s) x1=s.x1;
+				if ('x2' in s) x2=s.x2;
+				if ('y1' in s) y1=s.y1;
+				if ('y2' in s) y2=s.y2;
+				if ('x' in s) x=s.x;
+				if ('y' in s) y=s.y;
+			}
+			else{
+				if ('x1' in s) x1=x+s.x1;
+				if ('x2' in s) x2=x+s.x2;
+				if ('y1' in s) y1=y+s.y1;
+				if ('y2' in s) y2=y+s.y2;							
+				if ('x'  in s) x+=s.x;
+				if ('y'  in s) y+=s.y;
+			}
+			switch(command){
+				// linear line types
+				case 'm':
+				case 'M':
+				case 'l':
+				case 'L':
+				case 'h':
+				case 'H':
+				case 'v':
+				case 'V':
+					var point = {};
+					point.x = x;
+					point.y = y;
+					poly.push(point);
+				break;
+				// Quadratic Beziers
+				case 't':
+				case 'T':
+				// implicit control point
+				if(i > 0 && /[QqTt]/.test(seglist.getItem(i-1).pathSegTypeAsLetter)){
+					x1 = prevx + (prevx-prevx1);
+					y1 = prevy + (prevy-prevy1);
+				}
+				else{
+					x1 = prevx;
+					y1 = prevy;
+				}
+				case 'q':
+				case 'Q':
+					var pointlist = GeometryUtil.QuadraticBezier.linearize({x: prevx, y: prevy}, {x: x, y: y}, {x: x1, y: y1}, this.conf.tolerance);
+					pointlist.shift(); // firstpoint would already be in the poly
+					for(var j=0; j<pointlist.length; j++){
+						var point = {};
+						point.x = pointlist[j].x;
+						point.y = pointlist[j].y;
+						poly.push(point);
+					}
+				break;
+				case 's':
+				case 'S':
+					if(i > 0 && /[CcSs]/.test(seglist.getItem(i-1).pathSegTypeAsLetter)){
+						x1 = prevx + (prevx-prevx2);
+						y1 = prevy + (prevy-prevy2);
+					}
+					else{
+						x1 = prevx;
+						y1 = prevy;
+					}
+				case 'c':
+				case 'C':
+					var pointlist = GeometryUtil.CubicBezier.linearize({x: prevx, y: prevy}, {x: x, y: y}, {x: x1, y: y1}, {x: x2, y: y2}, this.conf.tolerance);
+					pointlist.shift(); // firstpoint would already be in the poly
+					for(var j=0; j<pointlist.length; j++){
+						var point = {};
+						point.x = pointlist[j].x;
+						point.y = pointlist[j].y;
+						poly.push(point);
+					}
+				break;
+				case 'a':
+				case 'A':
+					var pointlist = GeometryUtil.Arc.linearize({x: prevx, y: prevy}, {x: x, y: y}, s.r1, s.r2, s.angle, s.largeArcFlag,s.sweepFlag, this.conf.tolerance);
+					pointlist.shift();
+					
+					for(var j=0; j<pointlist.length; j++){
+						var point = {};
+						point.x = pointlist[j].x;
+						point.y = pointlist[j].y;
+						poly.push(point);
+					}
+				break;
+				case 'z': case 'Z': x=x0; y=y0; break;
+			}
+			// Record the start of a subpath
+			if (command=='M' || command=='m') x0=x, y0=y;
+		}
+		
+		return poly;
+	};
+
+	SvgParser.prototype.getEndpoints = function(p){
+		var start, end;
+		if(p.tagName == 'line'){
+			start = {
+				x: Number(p.getAttribute('x1')),
+				y: Number(p.getAttribute('y1'))
+			};
+			
+			end = {
+				x: Number(p.getAttribute('x2')),
+				y: Number(p.getAttribute('y2'))
+			};
+		}
+		else if(p.tagName == 'polyline'){
+			if(p.points.length == 0){
+				return null;
+			}
+			start = {
+				x: p.points[0].x,
+				y: p.points[0].y
+			};
+			
+			end = {
+				x: p.points[p.points.length-1].x,
+				y: p.points[p.points.length-1].y
+			};
+		}
+		else if(p.tagName == 'path'){
+			var poly = this.polygonifyPath(p);
+			if(!poly){
+				return null;
+			}
+			start = poly[0];
+			end = poly[poly.length-1];
+		}
+		else{
+			return null;
+		}
+		
+		return {start: start, end: end};
+	}
+
+	// return a path from list that has one and only one endpoint that is coincident with the given path
+	SvgParser.prototype.getCoincident = function(path, list, tolerance){
+		var index = list.indexOf(path);
+				
+		if(index < 0 || index == list.length-1){
+			return null;
+		}
+				
+		var coincident = [];
+		for(var i=index+1; i<list.length; i++){
+			var c = list[i];
+			
+			if(GeometryUtil.almostEqualPoints(path.endpoints.start, c.endpoints.start, tolerance)){
+				coincident.push({path: c, reverse1: true, reverse2: false});
+			}
+			else if(GeometryUtil.almostEqualPoints(path.endpoints.start, c.endpoints.end, tolerance)){
+				coincident.push({path: c, reverse1: true, reverse2: true});
+			}
+			else if(GeometryUtil.almostEqualPoints(path.endpoints.end, c.endpoints.end, tolerance)){
+				coincident.push({path: c, reverse1: false, reverse2: true});
+			}
+			else if(GeometryUtil.almostEqualPoints(path.endpoints.end, c.endpoints.start, tolerance)){
+				coincident.push({path: c, reverse1: false, reverse2: false});
+			}
+		}
+		
+		// there is an edge case here where the start point of 3 segments coincide. not going to bother...
+		if(coincident.length > 0){
+			return coincident[0];
+		}
+		return null;
+	}
+
+	SvgParser.prototype.mergeOpenPaths = function(a, b){
+		var topath = function(svg, p){
+			if(p.tagName == 'line'){
+				var pa = svg.createElementNS('http://www.w3.org/2000/svg', 'path');
+				pa.pathSegList.appendItem(pa.createSVGPathSegMovetoAbs(Number(p.getAttribute('x1')),Number(p.getAttribute('y1'))));
+				pa.pathSegList.appendItem(pa.createSVGPathSegLinetoAbs(Number(p.getAttribute('x2')),Number(p.getAttribute('y2'))));
+
+				return pa;
+			}
+			
+			if(p.tagName == 'polyline'){
+				if(p.points.length < 2){
+					return null;
+				}
+				pa = svg.createElementNS('http://www.w3.org/2000/svg', 'path');
+				pa.pathSegList.appendItem(pa.createSVGPathSegMovetoAbs(p.points[0].x,p.points[0].y));
+				for(var i=1; i<p.points.length; i++){
+					pa.pathSegList.appendItem(pa.createSVGPathSegLinetoAbs(p.points[i].x,p.points[i].y));
+				}				
+				return pa;
+			}
+			
+			return null;
+		}
+		
+		var patha;
+		if(a.tagName == 'path'){
+			patha = a;
+		}
+		else{
+			patha = topath(this.svg, a);
+		}
+		
+		var pathb;
+		if(b.tagName == 'path'){
+			pathb = b;
+		}
+		else{
+			pathb = topath(this.svg, b);
+		}
+				
+		if(!patha || !pathb){
+			return null;
+		}
+		
+		// merge b into a
+		var seglist = pathb.pathSegList;
+		
+		// first item is M command
+		var m1 = seglist.getItem(0);
+		patha.pathSegList.appendItem(patha.createSVGPathSegLinetoAbs(m1.x,m1.y));
+		
+		//seglist.removeItem(0);
+		for(var i=1; i<seglist.numberOfItems; i++){
+			patha.pathSegList.appendItem(seglist.getItem(i));
+		}
+		
+		if(a.parentNode){
+			a.parentNode.removeChild(a);
+		}
+		
+		if(b.parentNode){
+			b.parentNode.removeChild(b);
+		}
+		
+		return patha;
+	}
+
+	// reverse an open path in place, where an open path could by any of line, polyline or path types
+	SvgParser.prototype.reverseOpenPath = function(path){
+		/*if(path.endpoints){
+			var temp = path.endpoints.start;
+			path.endpoints.start = path.endpoints.end;
+			path.endpoints.end = temp;
+		}*/
+		if(path.tagName == 'line'){
+			var x1 = path.getAttribute('x1');
+			var x2 = path.getAttribute('x2');
+			var y1 = path.getAttribute('y1');
+			var y2 = path.getAttribute('y2');
+			
+			path.setAttribute('x1', x2);
+			path.setAttribute('y1', y2);
+			
+			path.setAttribute('x2', x1);
+			path.setAttribute('y2', y1);
+		}
+		else if(path.tagName == 'polyline'){
+			var points = [];
+			for(var i=0; i<path.points.length; i++){
+				points.push(path.points[i]);
+			}
+			
+			points = points.reverse();
+			path.points.clear();
+			for(i=0; i<points.length; i++){
+				path.points.appendItem(points[i]);
+			}
+		}
+		else if(path.tagName == 'path'){
+			this.pathToAbsolute(path);
+			
+			var seglist = path.pathSegList;
+			var reversed = [];
+			
+			var firstCommand = seglist.getItem(0);
+			var lastCommand = seglist.getItem(seglist.numberOfItems-1);
+			
+			var x=0, y=0, x0=0, y0=0, x1=0, y1=0, x2=0, y2=0, prevx=0, prevy=0, prevx1=0, prevy1=0, prevx2=0, prevy2=0;
+			
+			for(var i=0; i<seglist.numberOfItems; i++){
+				var s = seglist.getItem(i);
+				var command = s.pathSegTypeAsLetter;
+
+				prevx = x;
+				prevy = y;
+				
+				prevx1 = x1;
+				prevy1 = y1;
+				
+				prevx2 = x2;
+				prevy2 = y2;
+				
+				if (/[MLHVCSQTA]/.test(command)){
+					if ('x1' in s) x1=s.x1;
+					if ('x2' in s) x2=s.x2;
+					if ('y1' in s) y1=s.y1;
+					if ('y2' in s) y2=s.y2;
+					if ('x' in s) x=s.x;
+					if ('y' in s) y=s.y;
+				}
+				
+				switch(command){
+					// linear line types
+					case 'M':
+						reversed.push( y, x );
+					break;
+					case 'L':
+					case 'H':
+					case 'V':
+						reversed.push( 'L', y, x );
+					break;
+					// Quadratic Beziers
+					case 'T':
+					// implicit control point
+					if(i > 0 && /[QqTt]/.test(seglist.getItem(i-1).pathSegTypeAsLetter)){
+						x1 = prevx + (prevx-prevx1);
+						y1 = prevy + (prevy-prevy1);
+					}
+					else{
+						x1 = prevx;
+						y1 = prevy;
+					}
+					case 'Q':
+						reversed.push( y1, x1, 'Q', y, x );
+					break;
+					case 'S':
+						if(i > 0 && /[CcSs]/.test(seglist.getItem(i-1).pathSegTypeAsLetter)){
+							x1 = prevx + (prevx-prevx2);
+							y1 = prevy + (prevy-prevy2);
+						}
+						else{
+							x1 = prevx;
+							y1 = prevy;
+						}
+					case 'C':
+						reversed.push( y1, x1, y2, x2, 'C', y, x );
+					break;
+					case 'A':
+						// sweep flag needs to be inverted for the correct reverse path
+						reversed.push( (s.sweepFlag ? '0' : '1'), (s.largeArcFlag  ? '1' : '0'), s.angle, s.r2, s.r1, 'A', y, x );
+					break;
+					default:
+                		console.log('SVG path error: '+command);
+				}
+			}
+						
+			var newpath = reversed.reverse();
+			var reversedString = 'M ' + newpath.join( ' ' );
+			
+			path.setAttribute('d', reversedString);
+		}
 	}
 	
 	// return style node, if any

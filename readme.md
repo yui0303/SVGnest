@@ -2,6 +2,15 @@
 
 **SVGNest**: A browser-based vector nesting tool.
 
+## Fork History
+
+- https://github.com/Jack000/SVGnest (Academic Work References)
+
+## This Fork
+
+The primary goal is to add the features from [DeepNest](https://github.com/Jack000/Deepnest)
+- merges common lines for laser cuts
+
 **Demo:** http://svgnest.com
 
 (requires SVG and webworker support). Mobile warning: running the demo is CPU intensive.
