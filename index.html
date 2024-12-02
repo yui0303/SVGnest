@@ -125,6 +125,7 @@
 			var exit = document.getElementById('exitbutton');
 			
 			var isworking = false;
+			var upload_filename = 'Test'; // Default filename
 			
 			start.onclick = function(){
 				if(this.className == 'button start disabled'){
@@ -283,7 +284,8 @@
 				}
 				
 				var blob = new Blob([output], {type: "image/svg+xml;charset=utf-8"});
-				saveAs(blob, "SVGnest-output.svg");
+				const download_filename = `${upload_filename}-SVGnest-output.svg`;
+				saveAs(blob, download_filename);
 			}
 			
 			var zoomlevel = 1.0;
@@ -319,6 +321,7 @@
 			
 			fileinput.onchange = function(e){
 				handleFile(e.target.files[0]);
+				upload_filename = e.target.files[0].name;
 			}
 			
 			
