@@ -28,12 +28,12 @@
 		var config = {
 			clipperScale: 10000000,
 			curveTolerance: 0.3, 
-			spacing: 5,
+			spacing: 3,
 			rotations: 4,
 			populationSize: 10,
 			mutationRate: 10,
 			useHoles: false,
-			exploreConcave: false
+			exploreConcave: true
 		};
 		
 		this.working = false;
