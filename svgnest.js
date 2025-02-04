@@ -28,7 +28,7 @@
 		var config = {
 			clipperScale: 10000000,
 			curveTolerance: 0.3, 
-			spacing: 0,
+			spacing: 5,
 			rotations: 4,
 			populationSize: 10,
 			mutationRate: 10,
@@ -129,6 +129,7 @@
 		// progressCallback is called when progress is made
 		// displayCallback is called when a new placement has been made
 		this.start = function(progressCallback, displayCallback){						
+			console.log("spacing: ", config.spacing);
 			if(!svg || !bin){
 				return false;
 			}
