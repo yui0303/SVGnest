@@ -129,7 +129,7 @@
 		// progressCallback is called when progress is made
 		// displayCallback is called when a new placement has been made
 		this.start = function(progressCallback, displayCallback){						
-			console.log("spacing: ", config.spacing);
+			console.log("config: ", config);
 			if(!svg || !bin){
 				return false;
 			}
