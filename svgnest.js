@@ -27,8 +27,8 @@
 		var nfpCache = {};
 		var config = {
 			clipperScale: 10000000,
-			curveTolerance: 0.3, 
-			spacing: 3,
+			curveTolerance: 0, 
+			spacing: 20,
 			rotations: 4,
 			populationSize: 10,
 			mutationRate: 10,
